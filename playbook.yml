@@ -1,0 +1,169 @@
+- name: Install Nginx dan PHP di Web Server
+  hosts: webserver
+  become: yes
+
+  tasks:
+    - name: Install Nginx dan PHP-FPM beserta ekstensi untuk WordPress
+      apt:
+        name:
+          - nginx
+          - php-fpm
+          - php-mysql
+          - php-curl
+          - php-gd
+          - php-mbstring
+          - php-xml
+          - php-zip
+          - php-intl
+        state: present
+        update_cache: yes
+
+    - name: Pastikan Nginx berjalan dan aktif saat boot
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Pastikan PHP-FPM berjalan dan aktif saat boot
+      service:
+        name: php7.4-fpm
+        state: started
+        enabled: yes
+- name: Install dan konfigurasi MariaDB di DB Server
+  hosts: dbserver
+  become: yes
+
+  vars:
+    db_name: wordpress
+    db_user: wpuser
+    db_password: WpPass123!
+    web_server_ip: 192.168.56.10
+
+  tasks:
+    - name: Install MariaDB dan library Python untuk module MySQL
+      apt:
+        name:
+          - mariadb-server
+          - python3-pymysql
+        state: present
+        update_cache: yes
+
+    - name: Izinkan MariaDB menerima koneksi dari jaringan
+      lineinfile:
+        path: /etc/mysql/mariadb.conf.d/50-server.cnf
+        regexp: '^bind-address'
+        line: 'bind-address = 0.0.0.0'
+      notify: Restart MariaDB
+
+    - name: Pastikan MariaDB berjalan dan aktif saat boot
+      service:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Buat database WordPress
+      community.mysql.mysql_db:
+        name: "{{ db_name }}"
+        state: present
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Buat user database dan beri akses dari Web Server
+      community.mysql.mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        host: "{{ web_server_ip }}"
+        priv: "{{ db_name }}.*:ALL"
+        state: present
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+  handlers:
+    - name: Restart MariaDB
+      service:
+        name: mariadb
+        state: restarted
+- name: Deploy WordPress di Web Server
+  hosts: webserver
+  become: yes
+
+  vars:
+    db_name: wordpress
+    db_user: wpuser
+    db_password: WpPass123!
+    db_host: 192.168.56.11
+    wp_dir: /var/www/wordpress
+
+  tasks:
+    - name: Unduh WordPress terbaru
+      get_url:
+        url: https://wordpress.org/latest.tar.gz
+        dest: /tmp/wordpress-latest.tar.gz
+
+    - name: Ekstrak WordPress ke /var/www
+      unarchive:
+        src: /tmp/wordpress-latest.tar.gz
+        dest: /var/www
+        remote_src: yes
+        owner: www-data
+        group: www-data
+        creates: "{{ wp_dir }}/wp-settings.php"
+
+    - name: Salin wp-config-sample.php menjadi wp-config.php
+      copy:
+        src: "{{ wp_dir }}/wp-config-sample.php"
+        dest: "{{ wp_dir }}/wp-config.php"
+        remote_src: yes
+        force: no
+        owner: www-data
+        group: www-data
+        mode: '0640'
+
+    - name: Arahkan konfigurasi database ke DB Server
+      lineinfile:
+        path: "{{ wp_dir }}/wp-config.php"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: '^define\(\s*.DB_NAME.', line: "define( 'DB_NAME', '{{ db_name }}' );" }
+        - { regexp: '^define\(\s*.DB_USER.', line: "define( 'DB_USER', '{{ db_user }}' );" }
+        - { regexp: '^define\(\s*.DB_PASSWORD.', line: "define( 'DB_PASSWORD', '{{ db_password }}' );" }
+        - { regexp: '^define\(\s*.DB_HOST.', line: "define( 'DB_HOST', '{{ db_host }}' );" }
+
+    - name: Buat konfigurasi Nginx untuk WordPress
+      copy:
+        dest: /etc/nginx/sites-available/wordpress
+        content: |
+          server {
+              listen 80;
+              server_name _;
+              root /var/www/wordpress;
+              index index.php index.html;
+
+              location / {
+                  try_files $uri $uri/ /index.php?$args;
+              }
+
+              location ~ \.php$ {
+                  include snippets/fastcgi-php.conf;
+                  fastcgi_pass unix:/run/php/php7.4-fpm.sock;
+              }
+          }
+      notify: Restart Nginx
+
+    - name: Aktifkan situs WordPress
+      file:
+        src: /etc/nginx/sites-available/wordpress
+        dest: /etc/nginx/sites-enabled/wordpress
+        state: link
+      notify: Restart Nginx
+
+    - name: Nonaktifkan situs default Nginx
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: Restart Nginx
+
+  handlers:
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted
