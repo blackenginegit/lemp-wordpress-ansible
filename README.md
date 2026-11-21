@@ -94,4 +94,4 @@ lokal. Di lingkungan produksi, gunakan **Ansible Vault**.
 ## Studi Kasus
 
 Penjelasan alur berpikir dan teori di balik proyek ini ada di artikel Medium:
-**[Tempel tautan artikel Medium di sini]**
+https://medium.com/@blackengineid/membangun-infrastruktur-wordpress-multi-tier-otomatis-dengan-vagrant-dan-ansible-3f3f120be4c9
